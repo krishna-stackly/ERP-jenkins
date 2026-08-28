@@ -1,4 +1,17 @@
-def call(Map config) {
+def call(Map config = [:]) {
+
+/*
+ * ============================================================
+ * PREPARE ENVIRONMENT CHOICES
+ *
+ * Convert the caller-provided environment map into a
+ * newline-separated string for the Jenkins choice parameter.
+ * ============================================================
+ */
+
+def environmentChoices = config.environments
+    .keySet()
+    .join('\n')
 
 
 pipeline {
@@ -6,8 +19,6 @@ pipeline {
     /*
      * ============================================================
      * JENKINS AGENT
-     *
-     * AWS CLI is installed on this agent.
      * ============================================================
      */
 
@@ -21,9 +32,6 @@ pipeline {
     /*
      * ============================================================
      * PIPELINE PARAMETERS
-     *
-     * ENVIRONMENT is selected when triggering the pipeline.
-     * VERSION must follow semantic versioning.
      * ============================================================
      */
 
@@ -31,7 +39,7 @@ pipeline {
 
         choice(
             name: 'ENVIRONMENT',
-            choices: config.environments.keySet().toList(),
+            choices: "${environmentChoices}",
             description: 'Select target environment'
         )
 
@@ -41,13 +49,6 @@ pipeline {
             description: 'Application version in semantic version format, for example: 1.0.0'
         )
     }
-
-
-    /*
-     * ============================================================
-     * GLOBAL ENVIRONMENT VARIABLES
-     * ============================================================
-     */
 
     environment {
 

@@ -2,119 +2,95 @@ def call(Map config = [:]) {
 
     /*
      * ============================================================
-     * PREPARE ENVIRONMENT CHOICES
+     * PIPELINE PARAMETERS
      * ============================================================
      */
 
-    def environmentChoices = config.environments
-        .keySet()
-        .join('\n')
+    def environmentChoices = config.environments?.keySet()?.join('\n') ?: 'Dev\nQA'
 
-
-    pipeline {
-
-        /*
-         * ============================================================
-         * JENKINS AGENT
-         * ============================================================
-         */
-
-        agent {
-            node {
-                label '007'
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * PIPELINE PARAMETERS
-         * ============================================================
-         */
-
-        parameters {
-
+    properties([
+        parameters([
             choice(
                 name: 'ENVIRONMENT',
-                choices: "${environmentChoices}",
-                description: 'Select target environment'
-            )
+                choices: environmentChoices,
+                description: 'Select the target deployment environment'
+            ),
 
             string(
                 name: 'VERSION',
-                defaultValue: '1.0.0',
-                description: 'Application version in semantic version format, for example: 1.0.0'
+                defaultValue: '',
+                description: 'Application version using semantic versioning. Example: 1.0.0'
             )
+        ])
+    ])
+
+
+    /*
+     * ============================================================
+     * PIPELINE
+     * ============================================================
+     */
+
+    pipeline {
+
+        agent {
+            label config.agentLabel ?: 'jenkins-agent-007'
         }
 
 
-        /*
-         * ============================================================
-         * ENVIRONMENT VARIABLES
-         * ============================================================
-         */
+        options {
+
+            timestamps()
+
+            skipDefaultCheckout(true)
+
+        }
+
 
         environment {
 
             /*
-             * Pipeline parameters
+             * --------------------------------------------------------
+             * PIPELINE PARAMETERS
+             * --------------------------------------------------------
              */
 
             APP_VERSION = "${params.VERSION}"
-            TARGET_ENV  = "${params.ENVIRONMENT}"
+
+            TARGET_ENV = "${params.ENVIRONMENT}"
 
 
             /*
-             * AWS configuration
+             * --------------------------------------------------------
+             * AWS CONFIGURATION
+             * --------------------------------------------------------
              */
 
             ACCOUNT_ID = "${config.accountId}"
+
             AWS_REGION = "${config.awsRegion}"
 
 
             /*
-             * Terraform / Jenkins configuration
+             * --------------------------------------------------------
+             * TERRAFORM / PROJECT CONFIGURATION
+             * --------------------------------------------------------
              */
 
-            PROJECT  = "${config.projectName}"
+            PROJECT = "${config.projectName}"
+
             POC_NAME = "${config.pocName}"
 
-
-            /*
-             * Jenkins AWS credential
-             */
-
-            AWS_CREDENTIALS = "${config.awsCredentials ?: 'aws-erp'}"
         }
 
-
-        /*
-         * ============================================================
-         * PIPELINE OPTIONS
-         * ============================================================
-         */
-
-        options {
-
-            disableConcurrentBuilds()
-
-            timestamps()
-        }
-
-
-        /*
-         * ============================================================
-         * PIPELINE STAGES
-         * ============================================================
-         */
 
         stages {
 
 
             /*
-             * ============================================================
+             * ========================================================
              * PREPARE WORKSPACE
-             * ============================================================
+             * ========================================================
              */
 
             stage('Prepare Workspace') {
@@ -124,32 +100,18 @@ def call(Map config = [:]) {
                     cleanWs()
 
                     echo "Workspace cleaned successfully"
+
+                    checkout scm
+
                 }
+
             }
 
 
             /*
-             * ============================================================
-             * STAGE 1
-             *
-             * DISCOVER APPLICATION AND SHARED DATABASE
-             *
-             * Application EC2 tags:
-             *
-             * Project
-             * Environment
-             * component = app
-             * Created_by
-             * State = non-persistent
-             *
-             * Shared Database tags:
-             *
-             * Project
-             * Environment
-             * component = database
-             * Created_by
-             * Lifecycle = Persistent
-             * ============================================================
+             * ========================================================
+             * DISCOVER APPLICATION AND DATABASE INFRASTRUCTURE
+             * ========================================================
              */
 
             stage('Discover Application and Database Infrastructure') {
@@ -159,41 +121,35 @@ def call(Map config = [:]) {
                     script {
 
                         /*
-                         * Jenkins parameter values are:
+                         * ------------------------------------------------
+                         * ENVIRONMENT MAPPING
                          *
+                         * Jenkins parameter:
                          * Dev
                          * QA
                          *
-                         * Terraform AWS tags are:
-                         *
+                         * AWS EC2 tag values:
                          * dev
                          * qa
+                         * ------------------------------------------------
                          */
 
-                        def targetEnvLower = env.TARGET_ENV.toLowerCase()
+                        def awsEnvironment = TARGET_ENV.toLowerCase()
 
 
                         /*
-                         * =================================================
-                         * AUTHENTICATE TO AWS
-                         * =================================================
+                         * ------------------------------------------------
+                         * VALIDATE AWS CREDENTIALS
+                         * ------------------------------------------------
                          */
 
                         withCredentials([
-
                             [
                                 $class: 'AmazonWebServicesCredentialsBinding',
-                                credentialsId: "${env.AWS_CREDENTIALS}"
+                                credentialsId: config.awsCredentials
                             ]
-
                         ]) {
 
-
-                            /*
-                             * =================================================
-                             * VERIFY AWS AUTHENTICATION
-                             * =================================================
-                             */
 
                             sh """
                                 set -e
@@ -205,221 +161,222 @@ def call(Map config = [:]) {
                                 aws sts get-caller-identity
 
                                 echo ""
-                                echo "AWS Region          : ${env.AWS_REGION}"
-                                echo "Project             : ${env.PROJECT}"
-                                echo "Jenkins Environment : ${env.TARGET_ENV}"
-                                echo "AWS Tag Environment : ${targetEnvLower}"
-                                echo "Created By          : ${env.POC_NAME}"
+                                echo "AWS Region          : ${AWS_REGION}"
+                                echo "Project             : ${PROJECT}"
+                                echo "Jenkins Environment : ${TARGET_ENV}"
+                                echo "AWS Tag Environment : ${awsEnvironment}"
+                                echo "Created By          : ${POC_NAME}"
 
                                 echo "=========================================="
                             """
 
 
                             /*
-                             * =================================================
-                             * DISCOVER APPLICATION EC2
-                             * =================================================
+                             * ====================================================
+                             * APPLICATION EC2
+                             *
+                             * Application server has:
+                             *
+                             * Public IP
+                             * Private IP
+                             * ====================================================
                              */
 
-                            def appPublicIp = sh(
+
+                            env.APP_PUBLIC_IP = sh(
                                 script: """
                                     set -e
 
                                     aws ec2 describe-instances \
-                                        --region "${env.AWS_REGION}" \
-                                        --filters \
-                                            "Name=tag:Project,Values=${env.PROJECT}" \
-                                            "Name=tag:Environment,Values=${targetEnvLower}" \
-                                            "Name=tag:component,Values=app" \
-                                            "Name=tag:Created_by,Values=${env.POC_NAME}" \
-                                            "Name=tag:State,Values=non-persistent" \
-                                            "Name=instance-state-name,Values=running" \
-                                        --query 'Reservations[].Instances[].PublicIpAddress' \
-                                        --output text
+                                      --region ${AWS_REGION} \
+                                      --filters \
+                                        "Name=tag:Project,Values=${PROJECT}" \
+                                        "Name=tag:Environment,Values=${awsEnvironment}" \
+                                        "Name=tag:component,Values=app" \
+                                        "Name=tag:Created_by,Values=${POC_NAME}" \
+                                        "Name=tag:State,Values=non-persistent" \
+                                        "Name=instance-state-name,Values=running" \
+                                      --query "Reservations[].Instances[].PublicIpAddress" \
+                                      --output text
                                 """,
                                 returnStdout: true
                             ).trim()
 
 
-                            def appPrivateIp = sh(
+                            env.APP_PRIVATE_IP = sh(
                                 script: """
                                     set -e
 
                                     aws ec2 describe-instances \
-                                        --region "${env.AWS_REGION}" \
-                                        --filters \
-                                            "Name=tag:Project,Values=${env.PROJECT}" \
-                                            "Name=tag:Environment,Values=${targetEnvLower}" \
-                                            "Name=tag:component,Values=app" \
-                                            "Name=tag:Created_by,Values=${env.POC_NAME}" \
-                                            "Name=tag:State,Values=non-persistent" \
-                                            "Name=instance-state-name,Values=running" \
-                                        --query 'Reservations[].Instances[].PrivateIpAddress' \
-                                        --output text
+                                      --region ${AWS_REGION} \
+                                      --filters \
+                                        "Name=tag:Project,Values=${PROJECT}" \
+                                        "Name=tag:Environment,Values=${awsEnvironment}" \
+                                        "Name=tag:component,Values=app" \
+                                        "Name=tag:Created_by,Values=${POC_NAME}" \
+                                        "Name=tag:State,Values=non-persistent" \
+                                        "Name=instance-state-name,Values=running" \
+                                      --query "Reservations[].Instances[].PrivateIpAddress" \
+                                      --output text
                                 """,
                                 returnStdout: true
                             ).trim()
 
 
                             /*
-                             * Validate Application EC2
+                             * ====================================================
+                             * SHARED DATABASE EC2
+                             *
+                             * Database is in PRIVATE SUBNET.
+                             *
+                             * We ONLY retrieve Private IP.
+                             *
+                             * No Public IP query.
+                             * ====================================================
                              */
 
-                            if (!appPublicIp || appPublicIp == 'None') {
 
-                                error("""
+                            env.DB_PRIVATE_IP = sh(
+                                script: """
+                                    set -e
+
+                                    aws ec2 describe-instances \
+                                      --region ${AWS_REGION} \
+                                      --filters \
+                                        "Name=tag:Project,Values=${PROJECT}" \
+                                        "Name=tag:Environment,Values=${awsEnvironment}" \
+                                        "Name=tag:component,Values=database" \
+                                        "Name=tag:Created_by,Values=${POC_NAME}" \
+                                        "Name=tag:Lifecycle,Values=Persistent" \
+                                        "Name=instance-state-name,Values=running" \
+                                      --query "Reservations[].Instances[].PrivateIpAddress" \
+                                      --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+
+                            /*
+                             * ====================================================
+                             * VALIDATE DISCOVERED INFRASTRUCTURE
+                             * ====================================================
+                             */
+
+
+                            if (!env.APP_PUBLIC_IP) {
+
+                                error """
 Application EC2 Public IP was not found.
 
 Expected tags:
 
-Project     = ${env.PROJECT}
-Environment = ${targetEnvLower}
+Project     = ${PROJECT}
+Environment = ${awsEnvironment}
 component   = app
-Created_by  = ${env.POC_NAME}
+Created_by  = ${POC_NAME}
 State       = non-persistent
-""")
+"""
+
                             }
 
 
-                            if (!appPrivateIp || appPrivateIp == 'None') {
+                            if (!env.APP_PRIVATE_IP) {
 
-                                error("""
+                                error """
 Application EC2 Private IP was not found.
 
 Expected tags:
 
-Project     = ${env.PROJECT}
-Environment = ${targetEnvLower}
+Project     = ${PROJECT}
+Environment = ${awsEnvironment}
 component   = app
-Created_by  = ${env.POC_NAME}
+Created_by  = ${POC_NAME}
 State       = non-persistent
-""")
+"""
+
                             }
 
 
-                            /*
-                             * =================================================
-                             * DISCOVER SHARED DATABASE
-                             * =================================================
-                             */
+                            if (!env.DB_PRIVATE_IP) {
 
-                            def dbPublicIp = sh(
-                                script: """
-                                    set -e
-
-                                    aws ec2 describe-instances \
-                                        --region "${env.AWS_REGION}" \
-                                        --filters \
-                                            "Name=tag:Project,Values=${env.PROJECT}" \
-                                            "Name=tag:Environment,Values=${targetEnvLower}" \
-                                            "Name=tag:component,Values=database" \
-                                            "Name=tag:Created_by,Values=${env.POC_NAME}" \
-                                            "Name=tag:Lifecycle,Values=Persistent" \
-                                            "Name=instance-state-name,Values=running" \
-                                        --query 'Reservations[].Instances[].PublicIpAddress' \
-                                        --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-
-
-                            def dbPrivateIp = sh(
-                                script: """
-                                    set -e
-
-                                    aws ec2 describe-instances \
-                                        --region "${env.AWS_REGION}" \
-                                        --filters \
-                                            "Name=tag:Project,Values=${env.PROJECT}" \
-                                            "Name=tag:Environment,Values=${targetEnvLower}" \
-                                            "Name=tag:component,Values=database" \
-                                            "Name=tag:Created_by,Values=${env.POC_NAME}" \
-                                            "Name=tag:Lifecycle,Values=Persistent" \
-                                            "Name=instance-state-name,Values=running" \
-                                        --query 'Reservations[].Instances[].PrivateIpAddress' \
-                                        --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-
-
-                            /*
-                             * Validate Shared Database
-                             */
-
-                            if (!dbPublicIp || dbPublicIp == 'None') {
-
-                                error("""
-Shared Database Public IP was not found.
-
-Expected tags:
-
-Project     = ${env.PROJECT}
-Environment = ${targetEnvLower}
-component   = database
-Created_by  = ${env.POC_NAME}
-Lifecycle   = Persistent
-""")
-                            }
-
-
-                            if (!dbPrivateIp || dbPrivateIp == 'None') {
-
-                                error("""
+                                error """
 Shared Database Private IP was not found.
 
 Expected tags:
 
-Project     = ${env.PROJECT}
-Environment = ${targetEnvLower}
+Project     = ${PROJECT}
+Environment = ${awsEnvironment}
 component   = database
-Created_by  = ${env.POC_NAME}
+Created_by  = ${POC_NAME}
 Lifecycle   = Persistent
-""")
+"""
+
                             }
 
 
                             /*
-                             * =================================================
-                             * STORE DISCOVERED INFRASTRUCTURE DETAILS
-                             * =================================================
-                             */
-
-                            env.APP_PUBLIC_IP  = appPublicIp
-                            env.APP_PRIVATE_IP = appPrivateIp
-
-                            env.DB_PUBLIC_IP   = dbPublicIp
-                            env.DB_PRIVATE_IP  = dbPrivateIp
-
-
-                            /*
-                             * =================================================
+                             * ====================================================
                              * DISPLAY DISCOVERED INFRASTRUCTURE
-                             * =================================================
+                             * ====================================================
                              */
+
 
                             echo """
-
 ==================================================
 INFRASTRUCTURE DISCOVERED SUCCESSFULLY
 ==================================================
 
-APPLICATION EC2
+Application Server
 
 Public IP  : ${env.APP_PUBLIC_IP}
 Private IP : ${env.APP_PRIVATE_IP}
 
-SHARED DATABASE
 
-Public IP  : ${env.DB_PUBLIC_IP}
+Shared Database
+
 Private IP : ${env.DB_PRIVATE_IP}
+
+
+Environment
+
+Jenkins Environment : ${TARGET_ENV}
+AWS Tag Environment : ${awsEnvironment}
+
+
+Application Version
+
+${APP_VERSION}
 
 ==================================================
 """
+
                         }
+
                     }
+
                 }
+
             }
+
+
+            /*
+             * ========================================================
+             * PIPELINE PLACEHOLDER
+             *
+             * Add future stages below.
+             * ========================================================
+             */
+
+            stage('Pipeline Validation Complete') {
+
+                steps {
+
+                    echo "Infrastructure discovery completed successfully."
+
+                }
+
+            }
+
         }
 
 
@@ -431,6 +388,14 @@ Private IP : ${env.DB_PRIVATE_IP}
 
         post {
 
+
+            always {
+
+                cleanWs()
+
+            }
+
+
             success {
 
                 echo """
@@ -439,21 +404,13 @@ Private IP : ${env.DB_PRIVATE_IP}
 PIPELINE COMPLETED SUCCESSFULLY
 ==================================================
 
-Environment : ${env.TARGET_ENV}
-Version     : ${env.APP_VERSION}
-
-Application EC2
-
-Public IP  : ${env.APP_PUBLIC_IP}
-Private IP : ${env.APP_PRIVATE_IP}
-
-Shared Database
-
-Public IP  : ${env.DB_PUBLIC_IP}
-Private IP : ${env.DB_PRIVATE_IP}
+Environment : ${TARGET_ENV}
+Version     : ${APP_VERSION}
 
 ==================================================
+
 """
+
             }
 
 
@@ -465,19 +422,18 @@ Private IP : ${env.DB_PRIVATE_IP}
 PIPELINE FAILED
 ==================================================
 
-Environment : ${env.TARGET_ENV}
+Environment : ${TARGET_ENV}
 
 Check the Jenkins stage logs.
 
 ==================================================
+
 """
+
             }
 
-
-            always {
-
-                cleanWs()
-            }
         }
+
     }
+
 }

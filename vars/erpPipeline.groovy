@@ -268,7 +268,7 @@ pipeline {
                         if (!appPublicIp || appPublicIp == 'None') {
 
                             error("""
-```
+
 
 Application EC2 Public IP was not found.
 

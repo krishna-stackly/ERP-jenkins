@@ -1,6 +1,6 @@
 def call(Map config) {
 
-```
+
 pipeline {
 
     /*
@@ -282,11 +282,11 @@ component   = app
 """)
 }
 
-```
+
                         if (!appPrivateIp || appPrivateIp == 'None') {
 
                             error("""
-```
+
 
 Application EC2 Private IP was not found.
 
@@ -300,7 +300,7 @@ component   = app
 """)
 }
 
-```
+
                         /*
                          * =================================================
                          * DISCOVER SHARED DATABASE EC2
@@ -372,7 +372,7 @@ component   = app
                         if (!dbPublicIp || dbPublicIp == 'None') {
 
                             error("""
-```
+
 
 Shared Database Public IP was not found.
 
@@ -386,11 +386,11 @@ State       = Persistent
 """)
 }
 
-```
+
                         if (!dbPrivateIp || dbPrivateIp == 'None') {
 
                             error("""
-```
+
 
 Shared Database Private IP was not found.
 
@@ -404,7 +404,7 @@ State       = Persistent
 """)
 }
 
-```
+
                         /*
                          * =================================================
                          * STORE DISCOVERED INFRASTRUCTURE DETAILS
@@ -427,7 +427,7 @@ State       = Persistent
                          */
 
                         echo """
-```
+
 
 ==================================================
 INFRASTRUCTURE DISCOVERED SUCCESSFULLY
@@ -451,7 +451,7 @@ Private IP : ${env.DB_PRIVATE_IP}
 }
 }
 
-```
+
     /*
      * ============================================================
      * POST ACTIONS
@@ -463,7 +463,7 @@ Private IP : ${env.DB_PRIVATE_IP}
         success {
 
             echo """
-```
+
 
 ==================================================
 PIPELINE COMPLETED SUCCESSFULLY
@@ -486,11 +486,11 @@ Private IP : ${DB_PRIVATE_IP}
 """
 }
 
-```
+
         failure {
 
             echo """
-```
+
 
 ==================================================
 PIPELINE FAILED
@@ -504,13 +504,13 @@ Check the Jenkins stage logs.
 """
 }
 
-```
+
         always {
 
             cleanWs()
         }
     }
 }
-```
+
 
 }

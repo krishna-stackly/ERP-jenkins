@@ -652,7 +652,209 @@ Check the Jenkins stage logs.
                 echo "DOCKER CLEANUP COMPLETED"
                 echo "=========================================="
             """
+        stage('Deploy Application to App EC2') {
 
+    steps {
+
+        script {
+
+            withCredentials([
+
+                usernamePassword(
+                    credentialsId: config.appEc2Credentials,
+                    usernameVariable: 'SSH_USER',
+                    passwordVariable: 'SSH_PASSWORD'
+                ),
+
+                usernamePassword(
+                    credentialsId: config.dockerCredentials,
+                    usernameVariable: 'DOCKER_USERNAME',
+                    passwordVariable: 'DOCKER_PASSWORD'
+                )
+
+            ]) {
+
+                sh """
+                    set -e
+
+                    echo "=========================================="
+                    echo "DEPLOY APPLICATION TO APP EC2"
+                    echo "=========================================="
+
+                    echo "App Public IP  : ${APP_PUBLIC_IP}"
+                    echo "App Private IP : ${APP_PRIVATE_IP}"
+                    echo "DB Private IP  : ${DB_PRIVATE_IP}"
+                    echo "Version        : ${VERSION}"
+
+                    echo ""
+                    echo "=========================================="
+                    echo "VERIFY SSH CONNECTION"
+                    echo "=========================================="
+
+                    sshpass -p "\$SSH_PASSWORD" ssh \\
+                        -o StrictHostKeyChecking=no \\
+                        -o ConnectTimeout=10 \\
+                        "\$SSH_USER@${APP_PUBLIC_IP}" \\
+                        "hostname && whoami"
+
+                    echo ""
+                    echo "SSH CONNECTION SUCCESSFUL"
+
+
+                    echo ""
+                    echo "=========================================="
+                    echo "CREATE DEPLOYMENT DIRECTORY"
+                    echo "=========================================="
+
+                    sshpass -p "\$SSH_PASSWORD" ssh \\
+                        -o StrictHostKeyChecking=no \\
+                        "\$SSH_USER@${APP_PUBLIC_IP}" \\
+                        "mkdir -p /home/\$SSH_USER/erp"
+
+
+                    echo ""
+                    echo "=========================================="
+                    echo "GENERATE RUNTIME ENV FILE"
+                    echo "=========================================="
+
+                    mkdir -p deployment
+
+
+                    cat > deployment/.env <<EOF
+DEBUG=False
+
+SECRET_KEY=Ghgihtb=S(v+AP+106nO^a83wccGJh#CuNP_Fiqu)V%A7uEG^Z
+
+DB_ENGINE=django.db.backends.mysql
+
+DB_HOST=${DB_PRIVATE_IP}
+
+DB_PORT=3306
+
+DB_NAME=erp_db
+
+DB_USER=erp_user
+
+DB_PASSWORD=erp_pass
+
+
+ALLOWED_HOSTS=localhost,127.0.0.1,${APP_PUBLIC_IP}
+
+CORS_ALLOWED_ORIGINS=http://${APP_PUBLIC_IP}:3000
+
+FRONTEND_URL=http://${APP_PUBLIC_IP}:3000
+
+
+PORT=8000
+
+IMAGE_VERSION=${VERSION}
+EOF
+
+
+                    echo ""
+                    echo "=========================================="
+                    echo "COPY DEPLOYMENT FILES"
+                    echo "=========================================="
+
+                    sshpass -p "\$SSH_PASSWORD" scp \\
+                        -o StrictHostKeyChecking=no \\
+                        deployment/.env \\
+                        docker-compose.deploy.yml \\
+                        "\$SSH_USER@${APP_PUBLIC_IP}:/home/\$SSH_USER/erp/"
+
+
+                    echo ""
+                    echo "=========================================="
+                    echo "DEPLOY DOCKER CONTAINERS"
+                    echo "=========================================="
+
+                    sshpass -p "\$SSH_PASSWORD" ssh \\
+                        -o StrictHostKeyChecking=no \\
+                        "\$SSH_USER@${APP_PUBLIC_IP}" \\
+                        "DOCKER_USERNAME='\$DOCKER_USERNAME' \\
+                         DOCKER_PASSWORD='\$DOCKER_PASSWORD' \\
+                         bash -s" <<'REMOTE_SCRIPT'
+
+set -e
+
+cd /home/$USER/erp
+
+
+echo "=========================================="
+echo "DOCKER LOGIN"
+echo "=========================================="
+
+echo "$DOCKER_PASSWORD" | docker login \
+    -u "$DOCKER_USERNAME" \
+    --password-stdin
+
+
+echo ""
+echo "=========================================="
+echo "CURRENT DOCKER CONTAINERS"
+echo "=========================================="
+
+docker ps -a
+
+
+echo ""
+echo "=========================================="
+echo "PULLING LATEST APPLICATION IMAGES"
+echo "=========================================="
+
+docker compose \
+    -f docker-compose.deploy.yml \
+    pull
+
+
+echo ""
+echo "=========================================="
+echo "STARTING APPLICATION"
+echo "=========================================="
+
+docker compose \
+    -f docker-compose.deploy.yml \
+    up -d
+
+
+echo ""
+echo "=========================================="
+echo "RUNNING CONTAINERS"
+echo "=========================================="
+
+docker ps
+
+
+echo ""
+echo "=========================================="
+echo "CLEANING UNUSED DOCKER IMAGES"
+echo "=========================================="
+
+docker image prune -af
+
+
+echo ""
+echo "=========================================="
+echo "DEPLOYMENT COMPLETED"
+echo "=========================================="
+
+REMOTE_SCRIPT
+
+
+                    echo ""
+                    echo "=========================================="
+                    echo "APPLICATION DEPLOYED SUCCESSFULLY"
+                    echo "=========================================="
+
+                """
+
+            }
+
+        }
+
+    }
+
+}
 
             cleanWs(
 

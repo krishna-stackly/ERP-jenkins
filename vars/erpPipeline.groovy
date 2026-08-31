@@ -1,6 +1,6 @@
 def call(Map config = [:]) {
 
-```
+
 /*
  * ============================================================
  * CONFIGURATION
@@ -89,7 +89,7 @@ pipeline {
                 script {
 
                     echo """
-```
+
 
 ==================================================
 VALIDATING PIPELINE INPUT
@@ -102,11 +102,11 @@ Version     : ${params.VERSION}
 ==================================================
 """
 
-```
+
                     if (!(params.VERSION ==~ /^[0-9]+\\.[0-9]+\\.[0-9]+$/)) {
 
                         error("""
-```
+
 
 Invalid semantic version.
 
@@ -121,7 +121,7 @@ Expected format:
 }
 }
 
-```
+
         /*
          * ====================================================
          * STAGE 2
@@ -278,7 +278,7 @@ Expected format:
 
 
                     echo """
-```
+
 
 ==================================================
 INFRASTRUCTURE DISCOVERED
@@ -296,7 +296,7 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
 }
 }
 
-```
+
         /*
          * ====================================================
          * STAGE 4
@@ -544,7 +544,7 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
         success {
 
             echo """
-```
+
 
 ==================================================
 PIPELINE COMPLETED SUCCESSFULLY
@@ -566,11 +566,11 @@ ${DOCKER_REGISTRY}/${PROJECT_NAME}-frontend:${params.VERSION}
 """
 }
 
-```
+
         failure {
 
             echo """
-```
+
 
 ==================================================
 PIPELINE FAILED
@@ -588,7 +588,7 @@ Check the Jenkins stage logs.
 """
 }
 
-```
+
         always {
 
             script {
@@ -666,6 +666,6 @@ Check the Jenkins stage logs.
         }
     }
 }
-```
+
 
 }

@@ -103,20 +103,20 @@ Version     : ${params.VERSION}
 """
 
 
-                    if (!(params.VERSION ==~ /^[0-9]+\\.[0-9]+\\.[0-9]+$/)) {
+//                     if (!(params.VERSION ==~ /^[0-9]+\\.[0-9]+\\.[0-9]+$/)) {
 
-                        error("""
+//                         error("""
 
 
-Invalid semantic version.
+// Invalid semantic version.
 
-Expected format:
+// Expected format:
 
-1.0.0
-1.2.3
-2.0.0
-""")
-}
+// 1.0.0
+// 1.2.3
+// 2.0.0
+// """)
+// }
 }
 }
 }

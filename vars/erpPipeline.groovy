@@ -381,19 +381,15 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
 
         ]) {
 
+            /*
+             * ====================================================
+             * VERIFY SSH CONNECTION
+             * ====================================================
+             */
+
             sh """
                 set -e
 
-                echo "=========================================="
-                echo "DEPLOY APPLICATION"
-                echo "=========================================="
-
-                echo "App Public IP  : ${env.APP_PUBLIC_IP}"
-                echo "App Private IP : ${env.APP_PRIVATE_IP}"
-                echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
-                echo "Version        : ${params.VERSION}"
-
-                echo ""
                 echo "=========================================="
                 echo "VERIFY SSH CONNECTION"
                 echo "=========================================="
@@ -404,18 +400,14 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                     -o ConnectTimeout=10 \
                     "\$SSH_USER@${env.APP_PRIVATE_IP}" \
                     "hostname && whoami"
-
-                echo ""
-                echo "=========================================="
-                echo "CREATE DEPLOYMENT DIRECTORY"
-                echo "=========================================="
-
-                sshpass -p "\$SSH_PASSWORD" ssh \
-                    -o StrictHostKeyChecking=no \
-                    -o UserKnownHostsFile=/dev/null \
-                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                    "mkdir -p /home/ec2-user/erp"
             """
+
+
+            /*
+             * ====================================================
+             * CREATE RUNTIME ENVIRONMENT FILE
+             * ====================================================
+             */
 
             sh """
                 set -e
@@ -455,12 +447,25 @@ EOF
                 echo "Runtime environment file generated successfully"
             """
 
+
+            /*
+             * ====================================================
+             * COPY DEPLOYMENT FILES TO APP EC2
+             * ====================================================
+             */
+
             sh """
                 set -e
 
                 echo "=========================================="
                 echo "COPY DEPLOYMENT FILES"
                 echo "=========================================="
+
+                sshpass -p "\$SSH_PASSWORD" ssh \
+                    -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                    "mkdir -p /home/ec2-user/erp"
 
                 sshpass -p "\$SSH_PASSWORD" scp \
                     -o StrictHostKeyChecking=no \
@@ -470,32 +475,109 @@ EOF
                     "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/ec2-user/erp/"
             """
 
+
+            /*
+             * ====================================================
+             * DEPLOY APPLICATION
+             * ====================================================
+             */
+
             sh """
                 set -e
 
                 echo "=========================================="
-                echo "DEPLOY APPLICATION ON EC2"
+                echo "DEPLOY APPLICATION ON APP EC2"
                 echo "=========================================="
 
                 sshpass -p "\$SSH_PASSWORD" ssh \
                     -o StrictHostKeyChecking=no \
                     -o UserKnownHostsFile=/dev/null \
                     "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                    "cd /home/ec2-user/erp && \
-                    echo '\$DOCKER_PASSWORD' | docker login -u '\$DOCKER_USERNAME' --password-stdin && \
-                    docker compose --env-file .env.runtime -f docker-compose-deploy.yaml pull && \
-                    docker compose --env-file .env.runtime -f docker-compose-deploy.yaml up -d && \
-                    docker compose --env-file .env.runtime -f docker-compose-deploy.yaml ps && \
-                    docker image prune -af"
+                    "DOCKER_USERNAME='\$DOCKER_USERNAME' \
+                     DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
+                     bash -s" <<'REMOTE_SCRIPT'
+
+set -e
+
+cd /home/ec2-user/erp
+
+echo "=========================================="
+echo "DOCKER LOGIN"
+echo "=========================================="
+
+echo "\$DOCKER_PASSWORD" | docker login \
+    -u "\$DOCKER_USERNAME" \
+    --password-stdin
+
+
+echo "=========================================="
+echo "PULL DOCKER IMAGES"
+echo "=========================================="
+
+docker compose \
+    --env-file .env.runtime \
+    -f docker-compose-deploy.yaml \
+    pull
+
+
+echo "=========================================="
+echo "START APPLICATION"
+echo "=========================================="
+
+docker compose \
+    --env-file .env.runtime \
+    -f docker-compose-deploy.yaml \
+    up -d
+
+
+echo "=========================================="
+echo "RUNNING CONTAINERS"
+echo "=========================================="
+
+docker compose \
+    --env-file .env.runtime \
+    -f docker-compose-deploy.yaml \
+    ps
+
+
+echo "=========================================="
+echo "DOCKER LOGOUT"
+echo "=========================================="
+
+docker logout
+
+
+echo "=========================================="
+echo "CLEAN UNUSED DOCKER IMAGES"
+echo "=========================================="
+
+docker image prune -af
+
+
+echo "=========================================="
+echo "DEPLOYMENT COMPLETED SUCCESSFULLY"
+echo "=========================================="
+
+REMOTE_SCRIPT
             """
+
+
+            /*
+             * ====================================================
+             * SUCCESS MESSAGE
+             * ====================================================
+             */
 
             echo """
 ==========================================
 APPLICATION DEPLOYED SUCCESSFULLY
 ==========================================
 
-App EC2  : ${env.APP_PRIVATE_IP}
-Version  : ${params.VERSION}
+App Private IP : ${env.APP_PRIVATE_IP}
+App Public IP  : ${env.APP_PUBLIC_IP}
+DB Private IP  : ${env.DB_PRIVATE_IP}
+
+Version        : ${params.VERSION}
 
 ==========================================
 """

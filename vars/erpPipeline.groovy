@@ -649,7 +649,7 @@ EOF
                                     -o StrictHostKeyChecking=no \
                                     deployment/.env \
                                     application/docker-compose.deploy.yml \
-                                    "\$SSH_USER@${env.APP_PUBLIC_IP}:/home/\$SSH_USER/erp/"
+                                    "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/\$SSH_USER/erp/"
 
 
                                 echo ""
@@ -659,7 +659,7 @@ EOF
 
                                 sshpass -p "\$SSH_PASSWORD" ssh \
                                     -o StrictHostKeyChecking=no \
-                                    "\$SSH_USER@${env.APP_PUBLIC_IP}" \
+                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
                                     "DOCKER_USERNAME='\$DOCKER_USERNAME' \
                                      DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
                                      bash -s" <<'REMOTE_SCRIPT'

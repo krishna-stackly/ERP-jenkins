@@ -11,17 +11,18 @@ def dockerCredentials = config.dockerCredentials
 def dockerRegistry    = config.dockerRegistry
 def appEc2Credentials = config.appEc2Credentials
 def applicationRepo   = config.applicationRepo
-def environments      = config.environments ?: [:]
+
 
 pipeline {
 
     agent any
 
+
     parameters {
 
         choice(
             name: 'ENVIRONMENT',
-            choices: environments.keySet().join('\n'),
+            choices: ['dev', 'qa'],
             description: 'Select deployment environment'
         )
 
@@ -32,13 +33,23 @@ pipeline {
         )
     }
 
+
     environment {
 
         PROJECT_NAME = "${projectName}"
-        AWS_REGION   = "${awsRegion}"
+
+        AWS_REGION = "${awsRegion}"
     }
 
+
     stages {
+
+
+        /*
+         * ========================================================
+         * VALIDATE PARAMETERS
+         * ========================================================
+         */
 
         stage('Validate Parameters') {
 
@@ -47,14 +58,13 @@ pipeline {
                 script {
 
                     if (!params.VERSION?.trim()) {
+
                         error("VERSION cannot be empty")
                     }
 
-                    if (!environments.containsKey(params.ENVIRONMENT)) {
-                        error("Invalid ENVIRONMENT selected: ${params.ENVIRONMENT}")
-                    }
 
-                    env.AWS_TAG_ENVIRONMENT = environments[params.ENVIRONMENT]
+                    env.AWS_TAG_ENVIRONMENT = params.ENVIRONMENT
+
 
                     echo """
 
@@ -64,8 +74,11 @@ PIPELINE CONFIGURATION
 ======================
 
 Project     : ${projectName}
+
 Environment : ${params.ENVIRONMENT}
+
 Version     : ${params.VERSION}
+
 AWS Region  : ${awsRegion}
 
 ==================================================
@@ -75,20 +88,33 @@ AWS Region  : ${awsRegion}
 }
 
 
+        /*
+         * ========================================================
+         * CLONE APPLICATION
+         * ========================================================
+         */
+
         stage('Clone Application') {
 
             steps {
 
                 cleanWs()
 
+
                 checkout([
+
                     $class: 'GitSCM',
+
                     branches: [[name: '*/main']],
+
                     userRemoteConfigs: [[
+
                         credentialsId: gitCredentials,
+
                         url: applicationRepo
                     ]]
                 ])
+
 
                 sh '''
                     set -e
@@ -98,34 +124,52 @@ AWS Region  : ${awsRegion}
                     echo "=========================================="
 
                     pwd
-                    ls -la
+
 
                     echo ""
+
+                    echo "=========================================="
+                    echo "APPLICATION FILES"
+                    echo "=========================================="
+
+                    ls -la
+
+
+                    echo ""
+
                     echo "=========================================="
                     echo "VERIFY REQUIRED FILES"
                     echo "=========================================="
 
                     test -f docker-compose.yaml
+
                     test -f docker-compose-deploy.yaml
+
                     test -f .env
 
-                    echo "All required files found."
+
+                    echo ""
+
+                    echo "ALL REQUIRED FILES FOUND"
                 '''
             }
         }
 
 
         /*
-         * KEEP YOUR EXISTING AWS DISCOVERY LOGIC HERE.
+         * ========================================================
+         * DISCOVER INFRASTRUCTURE
          *
-         * This stage must populate:
+         * IMPORTANT:
+         * This stage assumes your existing infrastructure
+         * discovery logic is added here.
          *
-         * env.APP_PUBLIC_IP
-         * env.APP_PRIVATE_IP
-         * env.DB_PRIVATE_IP
+         * Required variables:
          *
-         * Replace only the placeholder commands below with
-         * your existing working AWS discovery commands.
+         * APP_PUBLIC_IP
+         * APP_PRIVATE_IP
+         * DB_PRIVATE_IP
+         * ========================================================
          */
 
         stage('Discover Infrastructure') {
@@ -135,22 +179,26 @@ AWS Region  : ${awsRegion}
                 script {
 
                     withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: awsCredentials
-                        ]
+
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+
+                         credentialsId: awsCredentials]
+
                     ]) {
 
+
                         /*
-                         * IMPORTANT:
-                         * Keep your existing AWS CLI discovery logic here.
+                         * ====================================================
+                         * KEEP YOUR EXISTING AWS DISCOVERY COMMANDS HERE
                          *
-                         * Example expected final values:
+                         * They must populate:
                          *
-                         * env.APP_PUBLIC_IP  = "x.x.x.x"
-                         * env.APP_PRIVATE_IP = "10.x.x.x"
-                         * env.DB_PRIVATE_IP  = "10.x.x.x"
+                         * env.APP_PUBLIC_IP
+                         * env.APP_PRIVATE_IP
+                         * env.DB_PRIVATE_IP
+                         * ====================================================
                          */
+
 
                         echo """
 
@@ -160,7 +208,9 @@ INFRASTRUCTURE DETAILS
 ======================
 
 App Public IP  : ${env.APP_PUBLIC_IP}
+
 App Private IP : ${env.APP_PRIVATE_IP}
+
 DB Private IP  : ${env.DB_PRIVATE_IP}
 
 ==================================================
@@ -169,10 +219,13 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
 
 
                     if (!env.APP_PRIVATE_IP?.trim()) {
+
                         error("APP_PRIVATE_IP was not discovered")
                     }
 
+
                     if (!env.DB_PRIVATE_IP?.trim()) {
+
                         error("DB_PRIVATE_IP was not discovered")
                     }
                 }
@@ -181,11 +234,14 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
 
 
         /*
-         * BUILD
+         * ========================================================
+         * BUILD DOCKER IMAGES
          *
          * Uses:
-         * - docker-compose.yaml
-         * - .env
+         *
+         * docker-compose.yaml
+         * .env
+         * ========================================================
          */
 
         stage('Build Docker Images') {
@@ -195,17 +251,22 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                 sh """
                     set -e
 
+
                     echo "=========================================="
-                    echo "BUILDING DOCKER IMAGES"
+                    echo "BUILD DOCKER IMAGES"
                     echo "=========================================="
 
+
                     export IMAGE_VERSION=${params.VERSION}
+
                     export VERSION=${params.VERSION}
+
 
                     docker compose \
                         --env-file .env \
                         -f docker-compose.yaml \
                         build
+
 
                     echo ""
 
@@ -213,11 +274,18 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                     echo "BUILT DOCKER IMAGES"
                     echo "=========================================="
 
+
                     docker images | grep "${projectName}" || true
                 """
             }
         }
 
+
+        /*
+         * ========================================================
+         * PUSH DOCKER IMAGES
+         * ========================================================
+         */
 
         stage('Push Docker Images') {
 
@@ -226,8 +294,11 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                 withCredentials([
 
                     usernamePassword(
+
                         credentialsId: dockerCredentials,
+
                         usernameVariable: 'DOCKER_USERNAME',
+
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
 
@@ -236,9 +307,11 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                     sh """
                         set -e
 
+
                         echo "=========================================="
                         echo "DOCKER LOGIN"
                         echo "=========================================="
+
 
                         echo "\$DOCKER_PASSWORD" | docker login \
                             -u "\$DOCKER_USERNAME" \
@@ -251,6 +324,7 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo "PUSH BACKEND IMAGE"
                         echo "=========================================="
 
+
                         docker push \
                             ${dockerRegistry}/${projectName}-backend:${params.VERSION}
 
@@ -261,13 +335,16 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo "PUSH FRONTEND IMAGE"
                         echo "=========================================="
 
+
                         docker push \
                             ${dockerRegistry}/${projectName}-frontend:${params.VERSION}
 
 
                         echo ""
 
+                        echo "=========================================="
                         echo "DOCKER IMAGES PUSHED SUCCESSFULLY"
+                        echo "=========================================="
                     """
                 }
             }
@@ -275,16 +352,20 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
 
 
         /*
-         * DEPLOY
+         * ========================================================
+         * DEPLOY APPLICATION
          *
-         * Jenkins workspace:
-         * - docker-compose-deploy.yaml
-         * - generated .env.runtime
+         * Jenkins Agent
+         *      |
+         *      | SSH using PRIVATE IP
+         *      v
+         * App EC2
          *
-         * App EC2:
-         * /home/ec2-user/erp/
-         * - docker-compose-deploy.yaml
-         * - .env.runtime
+         * Deployment files:
+         *
+         * docker-compose-deploy.yaml
+         * .env.runtime
+         * ========================================================
          */
 
         stage('Deploy Application to App EC2') {
@@ -294,14 +375,21 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                 withCredentials([
 
                     usernamePassword(
+
                         credentialsId: appEc2Credentials,
+
                         usernameVariable: 'SSH_USER',
+
                         passwordVariable: 'SSH_PASSWORD'
                     ),
 
+
                     usernamePassword(
+
                         credentialsId: dockerCredentials,
+
                         usernameVariable: 'DOCKER_USERNAME',
+
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
 
@@ -310,13 +398,17 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                     sh """
                         set -e
 
+
                         echo "=========================================="
                         echo "DEPLOY APPLICATION TO APP EC2"
                         echo "=========================================="
 
                         echo "App Public IP  : ${env.APP_PUBLIC_IP}"
+
                         echo "App Private IP : ${env.APP_PRIVATE_IP}"
+
                         echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
+
                         echo "Version        : ${params.VERSION}"
 
 
@@ -326,6 +418,7 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo "VERIFY DEPLOYMENT FILE"
                         echo "=========================================="
 
+
                         test -f docker-compose-deploy.yaml
 
 
@@ -334,6 +427,7 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo "=========================================="
                         echo "VERIFY SSH CONNECTION"
                         echo "=========================================="
+
 
                         sshpass -p "\$SSH_PASSWORD" ssh \
                             -o StrictHostKeyChecking=no \
@@ -353,6 +447,7 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo "CREATE REMOTE DEPLOYMENT DIRECTORY"
                         echo "=========================================="
 
+
                         sshpass -p "\$SSH_PASSWORD" ssh \
                             -o StrictHostKeyChecking=no \
                             "\$SSH_USER@${env.APP_PRIVATE_IP}" \
@@ -362,8 +457,9 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                         echo ""
 
                         echo "=========================================="
-                        echo "GENERATE .env.runtime"
+                        echo "GENERATE RUNTIME ENVIRONMENT"
                         echo "=========================================="
+
 
                         cat > .env.runtime <<EOF
 
@@ -399,8 +495,9 @@ EOF
                         echo ""
 
                         echo "=========================================="
-                        echo "COPY RUNTIME FILES TO APP EC2"
+                        echo "COPY DEPLOYMENT FILES"
                         echo "=========================================="
+
 
                         sshpass -p "\$SSH_PASSWORD" scp \
                             -o StrictHostKeyChecking=no \
@@ -411,9 +508,15 @@ EOF
 
                         echo ""
 
+                        echo "FILES COPIED SUCCESSFULLY"
+
+
+                        echo ""
+
                         echo "=========================================="
-                        echo "DEPLOY DOCKER CONTAINERS"
+                        echo "DEPLOY APPLICATION"
                         echo "=========================================="
+
 
                         sshpass -p "\$SSH_PASSWORD" ssh \
                             -o StrictHostKeyChecking=no \
@@ -428,15 +531,17 @@ DEPLOY_DIR="/home/$USER/erp"
 cd "$DEPLOY_DIR"
 
 echo "=========================================="
-echo "VERIFY REMOTE DEPLOYMENT FILES"
+echo "VERIFY DEPLOYMENT FILES"
 echo "=========================================="
 
 ls -la
 
 test -f .env.runtime
+
 test -f docker-compose-deploy.yaml
 
 echo ""
+
 echo "=========================================="
 echo "DOCKER LOGIN"
 echo "=========================================="
@@ -446,8 +551,9 @@ echo "$DOCKER_PASSWORD" | docker login
 --password-stdin
 
 echo ""
+
 echo "=========================================="
-echo "PULL LATEST APPLICATION IMAGES"
+echo "PULL APPLICATION IMAGES"
 echo "=========================================="
 
 docker compose 
@@ -456,6 +562,7 @@ docker compose
 pull
 
 echo ""
+
 echo "=========================================="
 echo "START APPLICATION"
 echo "=========================================="
@@ -466,6 +573,7 @@ docker compose
 up -d
 
 echo ""
+
 echo "=========================================="
 echo "APPLICATION STATUS"
 echo "=========================================="
@@ -476,6 +584,7 @@ docker compose
 ps
 
 echo ""
+
 echo "=========================================="
 echo "RUNNING CONTAINERS"
 echo "=========================================="
@@ -483,6 +592,7 @@ echo "=========================================="
 docker ps
 
 echo ""
+
 echo "=========================================="
 echo "CLEAN UNUSED IMAGES"
 echo "=========================================="
@@ -490,8 +600,9 @@ echo "=========================================="
 docker image prune -af
 
 echo ""
+
 echo "=========================================="
-echo "DEPLOYMENT COMPLETED SUCCESSFULLY"
+echo "DEPLOYMENT COMPLETED"
 echo "=========================================="
 
 REMOTE_SCRIPT
@@ -509,7 +620,14 @@ REMOTE_SCRIPT
     }
 
 
+    /*
+     * ========================================================
+     * POST ACTIONS
+     * ========================================================
+     */
+
     post {
+
 
         success {
 
@@ -521,13 +639,17 @@ PIPELINE COMPLETED SUCCESSFULLY
 ===============================
 
 Project     : ${projectName}
+
 Environment : ${params.ENVIRONMENT}
+
 Version     : ${params.VERSION}
 
 Backend:
+
 ${dockerRegistry}/${projectName}-backend:${params.VERSION}
 
 Frontend:
+
 ${dockerRegistry}/${projectName}-frontend:${params.VERSION}
 
 ==================================================
@@ -545,7 +667,9 @@ PIPELINE FAILED
 ===============
 
 Project     : ${projectName}
+
 Environment : ${params.ENVIRONMENT}
+
 Version     : ${params.VERSION}
 
 Check Jenkins console logs.
@@ -560,19 +684,26 @@ Check Jenkins console logs.
             sh """
                 set +e
 
+
                 echo "=========================================="
                 echo "JENKINS AGENT CLEANUP"
                 echo "=========================================="
 
+
                 docker image prune -f || true
+
 
                 docker logout || true
             """
 
+
             cleanWs(
+
                 deleteDirs: true,
+
                 disableDeferredWipeout: true
             )
+
 
             echo "Jenkins workspace cleanup completed."
         }

@@ -441,7 +441,7 @@ FRONTEND_URL=http://${env.APP_PUBLIC_IP}:3000
 
 PORT=8000
 
-IMAGE_VERSION=${params.VERSION}
+VERSION=${params.VERSION}
 EOF
 
                 echo "Runtime environment file generated successfully"

@@ -1,291 +1,204 @@
 def call(Map config = [:]) {
 
 
-    /*
-     * ============================================================
-     * CONFIGURATION
-     * ============================================================
-     */
+/*
+ * ========================================================
+ * CONFIGURATION
+ * ========================================================
+ */
 
-    def projectName = config.projectName
-    def pocName = config.pocName
-
-    def awsRegion = config.awsRegion
-    def awsCredentials = config.awsCredentials
-
-    def applicationRepo = config.applicationRepo
-    def gitCredentials = config.gitCredentials
-
-    def dockerCredentials = config.dockerCredentials
-    def dockerRegistry = config.dockerRegistry
-
-    def appEc2Credentials = config.appEc2Credentials
-
-    def environments = config.environments ?: [:]
+def accountId          = config.accountId
+def awsRegion          = config.awsRegion
+def projectName        = config.projectName
+def pocName            = config.pocName
+def awsCredentials     = config.awsCredentials
+def gitCredentials     = config.gitCredentials
+def dockerCredentials  = config.dockerCredentials
+def dockerRegistry     = config.dockerRegistry
+def appEc2Credentials  = config.appEc2Credentials
+def applicationRepo    = config.applicationRepo
+def environments       = config.environments
 
 
-    /*
-     * ============================================================
-     * JENKINS PARAMETERS
-     * ============================================================
-     */
+pipeline {
 
-    def parameterChoices = environments.keySet().join('\n')
+    agent any
 
 
-    pipeline {
+    parameters {
 
-        agent {
-            label 'jenkins-agent-007'
-        }
+        choice(
+            name: 'ENVIRONMENT',
+            choices: environments.keySet().join('\n'),
+            description: 'Select deployment environment'
+        )
 
-
-        options {
-
-            timestamps()
-
-            skipDefaultCheckout(true)
-        }
-
-
-        parameters {
-
-            choice(
-                name: 'ENVIRONMENT',
-                choices: parameterChoices,
-                description: 'Select deployment environment'
-            )
-
-            string(
-                name: 'VERSION',
-                defaultValue: '1.0.0',
-                description: 'Semantic version (example: 1.0.0)'
-            )
-        }
+        string(
+            name: 'VERSION',
+            defaultValue: 'latest',
+            description: 'Docker image version'
+        )
+    }
 
 
-        environment {
+    environment {
 
-            PROJECT_NAME = "${projectName}"
+        PROJECT_NAME = "${projectName}"
 
-            AWS_REGION = "${awsRegion}"
-
-            DOCKER_REGISTRY = "${dockerRegistry}"
-        }
+        AWS_REGION = "${awsRegion}"
+    }
 
 
-        stages {
+    stages {
 
 
-            /*
-             * ====================================================
-             * STAGE 1
-             * VALIDATE INPUT
-             * ====================================================
-             */
+        /*
+         * ========================================================
+         * VALIDATE PIPELINE
+         * ========================================================
+         */
 
-            stage('Validate Pipeline Input') {
+        stage('Validate Parameters') {
 
-                steps {
+            steps {
 
-                    script {
+                script {
 
-                        echo """
+                    if (!params.VERSION?.trim()) {
+
+                        error("VERSION cannot be empty")
+                    }
+
+
+                    echo """
+
 
 ==================================================
-VALIDATING PIPELINE INPUT
-==================================================
+PIPELINE CONFIGURATION
+======================
 
-Project     : ${PROJECT_NAME}
+Project     : ${projectName}
+
 Environment : ${params.ENVIRONMENT}
+
 Version     : ${params.VERSION}
+
+Region      : ${awsRegion}
 
 ==================================================
 """
+}
+}
+}
 
-                        /*
-                        if (!(params.VERSION ==~ /^[0-9]+\.[0-9]+\.[0-9]+$/)) {
 
-                            error("""
+        /*
+         * ========================================================
+         * CLONE APPLICATION
+         *
+         * IMPORTANT:
+         * Clone directly into Jenkins workspace.
+         * No dir('application').
+         * ========================================================
+         */
 
-Invalid semantic version.
+        stage('Clone Application') {
 
-Expected format:
+            steps {
 
-1.0.0
-1.2.3
-2.0.0
+                cleanWs()
 
-""")
-                        }
-                        */
-                    }
-                }
+                git(
+
+                    branch: 'main',
+
+                    credentialsId: gitCredentials,
+
+                    url: applicationRepo
+                )
+
+
+                sh """
+                    set -e
+
+                    echo "=========================================="
+                    echo "CURRENT WORKSPACE"
+                    echo "=========================================="
+
+                    pwd
+
+                    echo ""
+
+                    echo "=========================================="
+                    echo "APPLICATION FILES"
+                    echo "=========================================="
+
+                    ls -la
+
+
+                    echo ""
+
+                    echo "=========================================="
+                    echo "VERIFY REQUIRED BUILD FILES"
+                    echo "=========================================="
+
+                    test -f docker-compose.yaml
+                    test -f .env
+
+
+                    echo ""
+
+                    echo "=========================================="
+                    echo "VERIFY DEPLOYMENT FILE"
+                    echo "=========================================="
+
+                    test -f docker-compose-deploy.yaml
+
+
+                    echo ""
+
+                    echo "Application repository cloned successfully."
+                """
             }
+        }
 
 
-            /*
-             * ====================================================
-             * STAGE 2
-             * CLEAN WORKSPACE
-             * ====================================================
-             */
+        /*
+         * ========================================================
+         * FETCH INFRASTRUCTURE INFORMATION
+         *
+         * Keep your existing Terraform / AWS logic here.
+         * It should populate:
+         *
+         * APP_PUBLIC_IP
+         * APP_PRIVATE_IP
+         * DB_PRIVATE_IP
+         * ========================================================
+         */
 
-            stage('Prepare Workspace') {
+        stage('Get Infrastructure Details') {
 
-                steps {
+            steps {
 
-                    cleanWs()
+                script {
 
-                    echo 'Workspace cleaned successfully'
-                }
-            }
-
-
-            /*
-             * ====================================================
-             * STAGE 3
-             * DISCOVER INFRASTRUCTURE
-             * ====================================================
-             */
-
-            stage('Discover Infrastructure') {
-
-                steps {
-
-                    script {
-
-                        def awsTagEnvironment = environments[params.ENVIRONMENT]
-
-                        if (!awsTagEnvironment) {
-
-                            error(
-                                "No AWS tag mapping found for environment: ${params.ENVIRONMENT}"
-                            )
-                        }
+                    /*
+                     * KEEP YOUR EXISTING LOGIC HERE
+                     *
+                     * Example:
+                     *
+                     * env.APP_PUBLIC_IP
+                     * env.APP_PRIVATE_IP
+                     * env.DB_PRIVATE_IP
+                     */
 
 
-                        withCredentials([
+                    echo """
 
-                            [
-                                $class: 'AmazonWebServicesCredentialsBinding',
-                                credentialsId: awsCredentials
-                            ]
-
-                        ]) {
-
-
-                            /*
-                             * ----------------------------------------
-                             * APP PUBLIC IP
-                             * ----------------------------------------
-                             */
-
-                            env.APP_PUBLIC_IP = sh(
-
-                                script: """
-                                    aws ec2 describe-instances \
-                                      --region ${awsRegion} \
-                                      --filters \
-                                        "Name=tag:Project,Values=${projectName}" \
-                                        "Name=tag:Environment,Values=${awsTagEnvironment}" \
-                                        "Name=tag:component,Values=app" \
-                                        "Name=tag:Created_by,Values=${pocName}" \
-                                        "Name=tag:State,Values=non-persistent" \
-                                        "Name=instance-state-name,Values=running" \
-                                      --query 'Reservations[].Instances[].PublicIpAddress' \
-                                      --output text
-                                """,
-
-                                returnStdout: true
-
-                            ).trim()
-
-
-                            /*
-                             * ----------------------------------------
-                             * APP PRIVATE IP
-                             * ----------------------------------------
-                             */
-
-                            env.APP_PRIVATE_IP = sh(
-
-                                script: """
-                                    aws ec2 describe-instances \
-                                      --region ${awsRegion} \
-                                      --filters \
-                                        "Name=tag:Project,Values=${projectName}" \
-                                        "Name=tag:Environment,Values=${awsTagEnvironment}" \
-                                        "Name=tag:component,Values=app" \
-                                        "Name=tag:Created_by,Values=${pocName}" \
-                                        "Name=tag:State,Values=non-persistent" \
-                                        "Name=instance-state-name,Values=running" \
-                                      --query 'Reservations[].Instances[].PrivateIpAddress' \
-                                      --output text
-                                """,
-
-                                returnStdout: true
-
-                            ).trim()
-
-
-                            /*
-                             * ----------------------------------------
-                             * DATABASE PRIVATE IP
-                             * ----------------------------------------
-                             */
-
-                            env.DB_PRIVATE_IP = sh(
-
-                                script: """
-                                    aws ec2 describe-instances \
-                                      --region ${awsRegion} \
-                                      --filters \
-                                        "Name=tag:Project,Values=${projectName}" \
-                                        "Name=tag:Environment,Values=${awsTagEnvironment}" \
-                                        "Name=tag:component,Values=database" \
-                                        "Name=tag:Created_by,Values=${pocName}" \
-                                        "Name=tag:Lifecycle,Values=Persistent" \
-                                        "Name=instance-state-name,Values=running" \
-                                      --query 'Reservations[].Instances[].PrivateIpAddress' \
-                                      --output text
-                                """,
-
-                                returnStdout: true
-
-                            ).trim()
-                        }
-
-
-                        /*
-                         * --------------------------------------------
-                         * VALIDATE INFRASTRUCTURE
-                         * --------------------------------------------
-                         */
-
-                        if (!env.APP_PUBLIC_IP) {
-
-                            error('Application EC2 Public IP was not found.')
-                        }
-
-
-                        if (!env.APP_PRIVATE_IP) {
-
-                            error('Application EC2 Private IP was not found.')
-                        }
-
-
-                        if (!env.DB_PRIVATE_IP) {
-
-                            error('Shared Database Private IP was not found.')
-                        }
-
-
-                        echo """
 
 ==================================================
-INFRASTRUCTURE DISCOVERED
-==================================================
+INFRASTRUCTURE DETAILS
+======================
 
 Application Public IP  : ${env.APP_PUBLIC_IP}
 
@@ -295,172 +208,164 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
 
 ==================================================
 """
-                    }
-                }
+}
+}
+}
+
+
+        /*
+         * ========================================================
+         * BUILD APPLICATION
+         *
+         * Uses:
+         *
+         * docker-compose.yaml
+         * .env
+         * ========================================================
+         */
+
+        stage('Build Docker Images') {
+
+            steps {
+
+                sh """
+                    set -e
+
+                    echo "=========================================="
+                    echo "BUILDING DOCKER IMAGES"
+                    echo "=========================================="
+
+                    echo "Working Directory:"
+                    pwd
+
+
+                    echo ""
+
+                    echo "Build Configuration:"
+                    echo "docker-compose.yaml"
+                    echo ".env"
+
+
+                    export VERSION=${params.VERSION}
+
+
+                    docker compose \
+                        -f docker-compose.yaml \
+                        build
+
+
+                    echo ""
+
+                    echo "=========================================="
+                    echo "DOCKER IMAGES"
+                    echo "=========================================="
+
+                    docker images | grep "${projectName}" || true
+
+
+                    echo ""
+
+                    echo "DOCKER BUILD COMPLETED"
+                """
             }
+        }
 
 
-            /*
-             * ====================================================
-             * STAGE 4
-             * CLONE APPLICATION SOURCE
-             * ====================================================
-             */
+        /*
+         * ========================================================
+         * PUSH DOCKER IMAGES
+         * ========================================================
+         */
 
-            stage('Clone ERP Application') {
+        stage('Push Docker Images') {
 
-                steps {
+            steps {
 
-                    dir('application') {
+                withCredentials([
 
-                        git(
+                    usernamePassword(
 
-                            branch: 'main',
+                        credentialsId: dockerCredentials,
 
-                            credentialsId: gitCredentials,
+                        usernameVariable: 'DOCKER_USERNAME',
 
-                            url: applicationRepo
-                        )
-                    }
-
-
-                    sh """
-                        echo "=========================================="
-                        echo "APPLICATION REPOSITORY"
-                        echo "=========================================="
-
-                        cd application
-
-                        git log -1 --oneline
-
-                        echo ""
-                        echo "Repository structure:"
-
-                        find . -maxdepth 2 -type f | sort
-                    """
-                }
-            }
-
-
-            /*
-             * ====================================================
-             * STAGE 5
-             * PREPARE APPLICATION CONFIGURATION
-             * ====================================================
-             */
-
-            stage('Prepare Application Configuration') {
-
-                steps {
-
-                    script {
-
-                        sh """
-                            set -e
-
-                            cd application
-
-                            echo "=========================================="
-                            echo "UPDATING ENVIRONMENT CONFIGURATION"
-                            echo "=========================================="
-
-                            if [ ! -f ".env" ]; then
-
-                                echo "ERROR: .env file was not found."
-
-                                exit 1
-                            fi
-
-
-                            sed -i "s|{{APP_PUBLIC_IP}}|${env.APP_PUBLIC_IP}|g" .env
-
-                            sed -i "s|{{DB_PRIVATE_IP}}|${env.DB_PRIVATE_IP}|g" .env
-
-
-                            echo ""
-                            echo "=========================================="
-                            echo "VALIDATING PLACEHOLDERS"
-                            echo "=========================================="
-
-
-                            if grep -q '{{' .env; then
-
-                                echo "ERROR: Unresolved placeholders found in .env"
-
-                                grep '{{' .env
-
-                                exit 1
-                            fi
-
-
-                            echo "All placeholders successfully resolved."
-
-
-                            echo ""
-                            echo "=========================================="
-                            echo "VERSION"
-                            echo "=========================================="
-
-                            echo "VERSION=${params.VERSION}" > .pipeline.env
-
-
-                            echo "Project : ${env.PROJECT_NAME}"
-
-                            echo "Version : ${params.VERSION}"
-                        """
-                    }
-                }
-            }
-
-
-            /*
-             * ====================================================
-             * STAGE 6
-             * BUILD DOCKER IMAGES
-             * ====================================================
-             */
-
-            stage('Build Docker Images') {
-
-                steps {
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
 
                     sh """
                         set -e
 
-                        cd application
-
                         echo "=========================================="
-                        echo "BUILDING DOCKER IMAGES"
+                        echo "DOCKER LOGIN"
                         echo "=========================================="
 
-                        export VERSION=${params.VERSION}
-
-                        docker compose build
+                        echo "\$DOCKER_PASSWORD" | docker login \
+                            -u "\$DOCKER_USERNAME" \
+                            --password-stdin
 
 
                         echo ""
+
                         echo "=========================================="
-                        echo "BUILT IMAGES"
+                        echo "PUSHING BACKEND IMAGE"
                         echo "=========================================="
 
-                        docker images | grep "${projectName}" || true
+                        docker push \
+                            ${dockerRegistry}/${projectName}-backend:${params.VERSION}
+
+
+                        echo ""
+
+                        echo "=========================================="
+                        echo "PUSHING FRONTEND IMAGE"
+                        echo "=========================================="
+
+                        docker push \
+                            ${dockerRegistry}/${projectName}-frontend:${params.VERSION}
+
+
+                        echo ""
+
+                        echo "=========================================="
+                        echo "DOCKER PUSH COMPLETED"
+                        echo "=========================================="
                     """
                 }
             }
+        }
 
 
-            /*
-             * ====================================================
-             * STAGE 7
-             * PUSH DOCKER IMAGES
-             * ====================================================
-             */
+        /*
+         * ========================================================
+         * DEPLOY APPLICATION TO APP EC2
+         *
+         * Uses:
+         *
+         * docker-compose-deploy.yaml
+         * .env.runtime
+         *
+         * SSH uses APP_PRIVATE_IP
+         * ========================================================
+         */
 
-            stage('Push Docker Images to Docker Hub') {
+        stage('Deploy Application to App EC2') {
 
-                steps {
+            steps {
+
+                script {
 
                     withCredentials([
+
+                        usernamePassword(
+
+                            credentialsId: appEc2Credentials,
+
+                            usernameVariable: 'SSH_USER',
+
+                            passwordVariable: 'SSH_PASSWORD'
+                        ),
+
 
                         usernamePassword(
 
@@ -468,7 +373,7 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
 
                             usernameVariable: 'DOCKER_USERNAME',
 
-                            passwordVariable: 'DOCKER_TOKEN'
+                            passwordVariable: 'DOCKER_PASSWORD'
                         )
 
                     ]) {
@@ -476,151 +381,71 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
                         sh """
                             set -e
 
-
                             echo "=========================================="
-                            echo "DOCKER HUB LOGIN"
+                            echo "DEPLOY APPLICATION TO APP EC2"
                             echo "=========================================="
 
-                            echo "\$DOCKER_TOKEN" | docker login \
-                                -u "\$DOCKER_USERNAME" \
-                                --password-stdin
+                            echo "App Public IP  : ${env.APP_PUBLIC_IP}"
 
+                            echo "App Private IP : ${env.APP_PRIVATE_IP}"
 
-                            cd application
+                            echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
 
-
-                            export VERSION=${params.VERSION}
+                            echo "Version        : ${params.VERSION}"
 
 
                             echo ""
+
                             echo "=========================================="
-                            echo "PUSHING BACKEND IMAGE"
+                            echo "VERIFY DEPLOYMENT FILE"
                             echo "=========================================="
 
-                            docker push \
-                                ${dockerRegistry}/${projectName}-backend:${params.VERSION}
+                            test -f docker-compose-deploy.yaml
 
 
                             echo ""
+
                             echo "=========================================="
-                            echo "PUSHING FRONTEND IMAGE"
+                            echo "VERIFY SSH CONNECTION"
                             echo "=========================================="
 
-                            docker push \
-                                ${dockerRegistry}/${projectName}-frontend:${params.VERSION}
+                            sshpass -p "\$SSH_PASSWORD" ssh \
+                                -o StrictHostKeyChecking=no \
+                                -o ConnectTimeout=10 \
+                                "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                                "hostname && whoami"
 
 
                             echo ""
-                            echo "=========================================="
-                            echo "DOCKER PUSH COMPLETED"
-                            echo "=========================================="
 
-                            echo "Backend:"
-                            echo "${dockerRegistry}/${projectName}-backend:${params.VERSION}"
+                            echo "SSH CONNECTION SUCCESSFUL"
+
 
                             echo ""
 
-                            echo "Frontend:"
-                            echo "${dockerRegistry}/${projectName}-frontend:${params.VERSION}"
-                        """
-                    }
-                }
-            }
+                            echo "=========================================="
+                            echo "CREATE APP DEPLOYMENT DIRECTORY"
+                            echo "=========================================="
+
+                            sshpass -p "\$SSH_PASSWORD" ssh \
+                                -o StrictHostKeyChecking=no \
+                                "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                                "mkdir -p /home/\$SSH_USER/erp"
 
 
-            /*
-             * ====================================================
-             * STAGE 8
-             * DEPLOY APPLICATION TO APP EC2
-             * ====================================================
-             */
+                            echo ""
 
-            stage('Deploy Application to App EC2') {
+                            echo "=========================================="
+                            echo "GENERATE RUNTIME ENVIRONMENT FILE"
+                            echo "=========================================="
 
 
-steps {
-
-    script {
-
-        withCredentials([
-
-            usernamePassword(
-                credentialsId: appEc2Credentials,
-                usernameVariable: 'SSH_USER',
-                passwordVariable: 'SSH_PASSWORD'
-            ),
-
-            usernamePassword(
-                credentialsId: dockerCredentials,
-                usernameVariable: 'DOCKER_USERNAME',
-                passwordVariable: 'DOCKER_PASSWORD'
-            )
-
-        ]) {
-
-            sh """
-                set -e
-
-                echo "=========================================="
-                echo "DEPLOY APPLICATION TO APP EC2"
-                echo "=========================================="
-
-                echo "App Public IP  : ${env.APP_PUBLIC_IP}"
-                echo "App Private IP : ${env.APP_PRIVATE_IP}"
-                echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
-                echo "Version        : ${params.VERSION}"
-
-
-                echo ""
-                echo "=========================================="
-                echo "VERIFY REQUIRED FILES"
-                echo "=========================================="
-
-                test -f docker-compose-deploy.yaml
-
-                echo "Required deployment file found:"
-                ls -l docker-compose-deploy.yaml
-
-
-                echo ""
-                echo "=========================================="
-                echo "VERIFY SSH CONNECTION"
-                echo "=========================================="
-
-                sshpass -p "\$SSH_PASSWORD" ssh \
-                    -o StrictHostKeyChecking=no \
-                    -o ConnectTimeout=10 \
-                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                    "hostname && whoami"
-
-
-                echo ""
-                echo "SSH CONNECTION SUCCESSFUL"
-
-
-                echo ""
-                echo "=========================================="
-                echo "CREATE DEPLOYMENT DIRECTORY"
-                echo "=========================================="
-
-                sshpass -p "\$SSH_PASSWORD" ssh \
-                    -o StrictHostKeyChecking=no \
-                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                    "mkdir -p /home/\$SSH_USER/erp"
-
-
-                echo ""
-                echo "=========================================="
-                echo "GENERATE RUNTIME ENV FILE"
-                echo "=========================================="
-
-
-                cat > .env.runtime <<EOF
+                            cat > .env.runtime <<EOF
 
 
 DEBUG=False
 
-SECRET_KEY=Ghgihtb=S(v+AP+106nO^a83wccGJh#CuNP_Fiqu)V%A7uEG^Z
+SECRET_KEY=YOUR_SECRET_KEY
 
 DB_ENGINE=django.db.backends.mysql
 
@@ -632,27 +457,13 @@ DB_NAME=erp_db
 
 DB_USER=erp_user
 
-DB_PASSWORD=erp_pass
+DB_PASSWORD=YOUR_DB_PASSWORD
 
-ALLOWED_HOSTS=localhost,127.0.0.1,backend-qa.internal,${env.APP_PUBLIC_IP}
+ALLOWED_HOSTS=localhost,127.0.0.1,${env.APP_PUBLIC_IP}
 
 CORS_ALLOWED_ORIGINS=http://${env.APP_PUBLIC_IP}:3000
 
 FRONTEND_URL=http://${env.APP_PUBLIC_IP}:3000
-
-EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
-
-EMAIL_PORT=587
-
-EMAIL_USE_TLS=True
-
-EMAIL_HOST=smtp.gmail.com
-
-EMAIL_HOST_USER=
-
-EMAIL_HOST_PASSWORD=
-
-MEDIA_URL=/media/
 
 PORT=8000
 
@@ -660,40 +471,41 @@ VERSION=${params.VERSION}
 EOF
 
 
-                echo ""
-                echo "Runtime environment file generated"
+                            echo ""
 
-                grep -v -E 'SECRET_KEY|DB_PASSWORD|EMAIL_HOST_PASSWORD' .env.runtime \
-                    || true
+                            echo "Runtime environment created successfully."
 
 
-                echo ""
-                echo "=========================================="
-                echo "COPY DEPLOYMENT FILES TO APP EC2"
-                echo "=========================================="
+                            echo ""
 
-                sshpass -p "\$SSH_PASSWORD" scp \
-                    -o StrictHostKeyChecking=no \
-                    .env.runtime \
-                    docker-compose-deploy.yaml \
-                    "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/\$SSH_USER/erp/"
+                            echo "=========================================="
+                            echo "COPY DEPLOYMENT FILES"
+                            echo "=========================================="
 
-
-                echo ""
-                echo "Files copied successfully"
+                            sshpass -p "\$SSH_PASSWORD" scp \
+                                -o StrictHostKeyChecking=no \
+                                .env.runtime \
+                                docker-compose-deploy.yaml \
+                                "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/\$SSH_USER/erp/"
 
 
-                echo ""
-                echo "=========================================="
-                echo "DEPLOY DOCKER CONTAINERS"
-                echo "=========================================="
+                            echo ""
 
-                sshpass -p "\$SSH_PASSWORD" ssh \
-                    -o StrictHostKeyChecking=no \
-                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                    "DOCKER_USERNAME='\$DOCKER_USERNAME' \
-                     DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
-                     bash -s" <<'REMOTE_SCRIPT'
+                            echo "Deployment files copied successfully."
+
+
+                            echo ""
+
+                            echo "=========================================="
+                            echo "DEPLOY DOCKER CONTAINERS"
+                            echo "=========================================="
+
+                            sshpass -p "\$SSH_PASSWORD" ssh \
+                                -o StrictHostKeyChecking=no \
+                                "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                                "DOCKER_USERNAME='\$DOCKER_USERNAME' \
+                                 DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
+                                 bash -s" <<'REMOTE_SCRIPT'
 
 
 set -e
@@ -709,9 +521,11 @@ echo "=========================================="
 ls -la
 
 test -f .env.runtime
+
 test -f docker-compose-deploy.yaml
 
 echo ""
+
 echo "=========================================="
 echo "DOCKER LOGIN"
 echo "=========================================="
@@ -721,6 +535,7 @@ echo "$DOCKER_PASSWORD" | docker login
 --password-stdin
 
 echo ""
+
 echo "=========================================="
 echo "CURRENT DOCKER CONTAINERS"
 echo "=========================================="
@@ -728,8 +543,9 @@ echo "=========================================="
 docker ps -a
 
 echo ""
+
 echo "=========================================="
-echo "PULLING LATEST APPLICATION IMAGES"
+echo "PULL LATEST APPLICATION IMAGES"
 echo "=========================================="
 
 docker compose 
@@ -738,8 +554,9 @@ docker compose
 pull
 
 echo ""
+
 echo "=========================================="
-echo "STARTING APPLICATION"
+echo "START APPLICATION"
 echo "=========================================="
 
 docker compose 
@@ -748,13 +565,7 @@ docker compose
 up -d
 
 echo ""
-echo "=========================================="
-echo "RUNNING CONTAINERS"
-echo "=========================================="
 
-docker ps
-
-echo ""
 echo "=========================================="
 echo "APPLICATION STATUS"
 echo "=========================================="
@@ -765,13 +576,23 @@ docker compose
 ps
 
 echo ""
+
 echo "=========================================="
-echo "CLEANING UNUSED DOCKER IMAGES"
+echo "RUNNING CONTAINERS"
+echo "=========================================="
+
+docker ps
+
+echo ""
+
+echo "=========================================="
+echo "CLEAN UNUSED DOCKER IMAGES"
 echo "=========================================="
 
 docker image prune -af
 
 echo ""
+
 echo "=========================================="
 echo "DEPLOYMENT COMPLETED"
 echo "=========================================="
@@ -779,37 +600,36 @@ echo "=========================================="
 REMOTE_SCRIPT
 
 
-                echo ""
-                echo "=========================================="
-                echo "APPLICATION DEPLOYED SUCCESSFULLY"
-                echo "=========================================="
-            """
+                            echo ""
+
+                            echo "=========================================="
+                            echo "APPLICATION DEPLOYED SUCCESSFULLY"
+                            echo "=========================================="
+                        """
+                    }
+                }
+            }
         }
     }
-}
 
 
-}
+    /*
+     * ========================================================
+     * POST ACTIONS
+     * ========================================================
+     */
 
-        }
-
-
-        /*
-         * ========================================================
-         * POST ACTIONS
-         * ========================================================
-         */
-
-        post {
+    post {
 
 
-            success {
+        success {
 
-                echo """
+            echo """
+
 
 ==================================================
 PIPELINE COMPLETED SUCCESSFULLY
-==================================================
+===============================
 
 Project     : ${env.PROJECT_NAME}
 
@@ -825,16 +645,17 @@ ${dockerRegistry}/${projectName}-frontend:${params.VERSION}
 
 ==================================================
 """
-            }
+}
 
 
-            failure {
+        failure {
 
-                echo """
+            echo """
+
 
 ==================================================
 PIPELINE FAILED
-==================================================
+===============
 
 Project     : ${env.PROJECT_NAME}
 
@@ -846,87 +667,83 @@ Check the Jenkins stage logs.
 
 ==================================================
 """
-            }
+}
 
 
-            always {
+        always {
+
+            sh """
+                set +e
 
 
-                script {
+                echo "=========================================="
+                echo "DOCKER CLEANUP"
+                echo "=========================================="
 
-                    echo 'Starting Jenkins agent cleanup...'
-                }
+                echo "Removing ERP containers..."
 
-
-                sh """
-                    set +e
-
-
-                    echo "=========================================="
-                    echo "DOCKER CLEANUP"
-                    echo "=========================================="
+                docker ps -aq \
+                    --filter "name=${projectName}" \
+                    | xargs -r docker rm -f
 
 
-                    echo "Removing ERP containers..."
+                echo ""
 
-                    docker ps -aq \
-                        --filter "name=${projectName}" \
-                        | xargs -r docker rm -f
+                echo "Removing ERP Docker images..."
 
-
-                    echo ""
-                    echo "Removing ERP Docker images..."
-
-
-                    docker images \
-                        "${dockerRegistry}/${projectName}-backend" \
-                        -q \
-                        | xargs -r docker rmi -f
+                docker images \
+                    "${dockerRegistry}/${projectName}-backend" \
+                    -q \
+                    | xargs -r docker rmi -f
 
 
-                    docker images \
-                        "${dockerRegistry}/${projectName}-frontend" \
-                        -q \
-                        | xargs -r docker rmi -f
+                docker images \
+                    "${dockerRegistry}/${projectName}-frontend" \
+                    -q \
+                    | xargs -r docker rmi -f
 
 
-                    echo ""
-                    echo "Removing dangling Docker images..."
+                echo ""
 
-                    docker image prune -f
+                echo "Removing dangling Docker images..."
 
-
-                    echo ""
-                    echo "Removing Docker build cache..."
-
-                    docker builder prune -af
+                docker image prune -f
 
 
-                    echo ""
-                    echo "Docker logout..."
+                echo ""
 
-                    docker logout || true
+                echo "Removing Docker build cache..."
 
-
-                    echo ""
-                    echo "=========================================="
-                    echo "DOCKER CLEANUP COMPLETED"
-                    echo "=========================================="
-                """
+                docker builder prune -af
 
 
-                cleanWs(
+                echo ""
 
-                    deleteDirs: true,
+                echo "Docker logout..."
 
-                    disableDeferredWipeout: true
-                )
+                docker logout || true
 
 
-                echo 'Jenkins workspace cleanup completed.'
-            }
+                echo ""
+
+                echo "=========================================="
+                echo "DOCKER CLEANUP COMPLETED"
+                echo "=========================================="
+            """
+
+
+            cleanWs(
+
+                deleteDirs: true,
+
+                disableDeferredWipeout: true
+            )
+
+
+            echo 'Jenkins workspace cleanup completed.'
         }
     }
 }
 
-// Changed varibale
+
+}

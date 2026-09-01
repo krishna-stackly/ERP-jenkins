@@ -537,81 +537,87 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
 
             stage('Deploy Application to App EC2') {
 
-                steps {
 
-                    script {
+steps {
 
-                        withCredentials([
+    script {
 
-                            usernamePassword(
+        withCredentials([
 
-                                credentialsId: appEc2Credentials,
+            usernamePassword(
+                credentialsId: appEc2Credentials,
+                usernameVariable: 'SSH_USER',
+                passwordVariable: 'SSH_PASSWORD'
+            ),
 
-                                usernameVariable: 'SSH_USER',
+            usernamePassword(
+                credentialsId: dockerCredentials,
+                usernameVariable: 'DOCKER_USERNAME',
+                passwordVariable: 'DOCKER_PASSWORD'
+            )
 
-                                passwordVariable: 'SSH_PASSWORD'
-                            ),
+        ]) {
 
-                            usernamePassword(
+            sh """
+                set -e
 
-                                credentialsId: dockerCredentials,
+                echo "=========================================="
+                echo "DEPLOY APPLICATION TO APP EC2"
+                echo "=========================================="
 
-                                usernameVariable: 'DOCKER_USERNAME',
-
-                                passwordVariable: 'DOCKER_PASSWORD'
-                            )
-
-                        ]) {
-
-                            sh """
-                                set -e
-
-                                echo "=========================================="
-                                echo "DEPLOY APPLICATION TO APP EC2"
-                                echo "=========================================="
-
-                                echo "App Public IP  : ${env.APP_PUBLIC_IP}"
-                                echo "App Private IP : ${env.APP_PRIVATE_IP}"
-                                echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
-                                echo "Version        : ${params.VERSION}"
+                echo "App Public IP  : ${env.APP_PUBLIC_IP}"
+                echo "App Private IP : ${env.APP_PRIVATE_IP}"
+                echo "DB Private IP  : ${env.DB_PRIVATE_IP}"
+                echo "Version        : ${params.VERSION}"
 
 
-                                echo ""
-                                echo "=========================================="
-                                echo "VERIFY SSH CONNECTION"
-                                echo "=========================================="
+                echo ""
+                echo "=========================================="
+                echo "VERIFY REQUIRED FILES"
+                echo "=========================================="
 
-                                sshpass -p "\$SSH_PASSWORD" ssh \
-                                    -o StrictHostKeyChecking=no \
-                                    -o ConnectTimeout=10 \
-                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                                    "hostname && whoami"
+                test -f docker-compose-deploy.yaml
 
-
-                                echo ""
-                                echo "SSH CONNECTION SUCCESSFUL"
+                echo "Required deployment file found:"
+                ls -l docker-compose-deploy.yaml
 
 
-                                echo ""
-                                echo "=========================================="
-                                echo "CREATE DEPLOYMENT DIRECTORY"
-                                echo "=========================================="
+                echo ""
+                echo "=========================================="
+                echo "VERIFY SSH CONNECTION"
+                echo "=========================================="
 
-                                sshpass -p "\$SSH_PASSWORD" ssh \
-                                    -o StrictHostKeyChecking=no \
-                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                                    "mkdir -p /home/\$SSH_USER/erp"
-
-
-                                echo ""
-                                echo "=========================================="
-                                echo "GENERATE RUNTIME ENV FILE"
-                                echo "=========================================="
-
-                                mkdir -p deployment
+                sshpass -p "\$SSH_PASSWORD" ssh \
+                    -o StrictHostKeyChecking=no \
+                    -o ConnectTimeout=10 \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                    "hostname && whoami"
 
 
-                                cat > deployment/.env <<EOF
+                echo ""
+                echo "SSH CONNECTION SUCCESSFUL"
+
+
+                echo ""
+                echo "=========================================="
+                echo "CREATE DEPLOYMENT DIRECTORY"
+                echo "=========================================="
+
+                sshpass -p "\$SSH_PASSWORD" ssh \
+                    -o StrictHostKeyChecking=no \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                    "mkdir -p /home/\$SSH_USER/erp"
+
+
+                echo ""
+                echo "=========================================="
+                echo "GENERATE RUNTIME ENV FILE"
+                echo "=========================================="
+
+
+                cat > .env.runtime <<EOF
+
+
 DEBUG=False
 
 SECRET_KEY=Ghgihtb=S(v+AP+106nO^a83wccGJh#CuNP_Fiqu)V%A7uEG^Z
@@ -628,55 +634,91 @@ DB_USER=erp_user
 
 DB_PASSWORD=erp_pass
 
-ALLOWED_HOSTS=localhost,127.0.0.1,${env.APP_PUBLIC_IP}
+ALLOWED_HOSTS=localhost,127.0.0.1,backend-qa.internal,${env.APP_PUBLIC_IP}
 
 CORS_ALLOWED_ORIGINS=http://${env.APP_PUBLIC_IP}:3000
 
 FRONTEND_URL=http://${env.APP_PUBLIC_IP}:3000
 
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+
+EMAIL_PORT=587
+
+EMAIL_USE_TLS=True
+
+EMAIL_HOST=smtp.gmail.com
+
+EMAIL_HOST_USER=
+
+EMAIL_HOST_PASSWORD=
+
+MEDIA_URL=/media/
+
 PORT=8000
 
-IMAGE_VERSION=${params.VERSION}
+VERSION=${params.VERSION}
 EOF
 
 
-                                echo ""
-                                echo "=========================================="
-                                echo "COPY DEPLOYMENT FILES"
-                                echo "=========================================="
+                echo ""
+                echo "Runtime environment file generated"
 
-                                sshpass -p "\$SSH_PASSWORD" scp \
-                                    -o StrictHostKeyChecking=no \
-                                    deployment/.env \
-                                    application/docker-compose.deploy.yml \
-                                    "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/\$SSH_USER/erp/"
+                grep -v -E 'SECRET_KEY|DB_PASSWORD|EMAIL_HOST_PASSWORD' .env.runtime \
+                    || true
 
 
-                                echo ""
-                                echo "=========================================="
-                                echo "DEPLOY DOCKER CONTAINERS"
-                                echo "=========================================="
+                echo ""
+                echo "=========================================="
+                echo "COPY DEPLOYMENT FILES TO APP EC2"
+                echo "=========================================="
 
-                                sshpass -p "\$SSH_PASSWORD" ssh \
-                                    -o StrictHostKeyChecking=no \
-                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
-                                    "DOCKER_USERNAME='\$DOCKER_USERNAME' \
-                                     DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
-                                     bash -s" <<'REMOTE_SCRIPT'
+                sshpass -p "\$SSH_PASSWORD" scp \
+                    -o StrictHostKeyChecking=no \
+                    .env.runtime \
+                    docker-compose-deploy.yaml \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/\$SSH_USER/erp/"
+
+
+                echo ""
+                echo "Files copied successfully"
+
+
+                echo ""
+                echo "=========================================="
+                echo "DEPLOY DOCKER CONTAINERS"
+                echo "=========================================="
+
+                sshpass -p "\$SSH_PASSWORD" ssh \
+                    -o StrictHostKeyChecking=no \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                    "DOCKER_USERNAME='\$DOCKER_USERNAME' \
+                     DOCKER_PASSWORD='\$DOCKER_PASSWORD' \
+                     bash -s" <<'REMOTE_SCRIPT'
+
 
 set -e
 
-cd /home/$USER/erp
+DEPLOY_DIR="/home/$USER/erp"
 
+cd "$DEPLOY_DIR"
 
+echo "=========================================="
+echo "VERIFY DEPLOYMENT FILES"
+echo "=========================================="
+
+ls -la
+
+test -f .env.runtime
+test -f docker-compose-deploy.yaml
+
+echo ""
 echo "=========================================="
 echo "DOCKER LOGIN"
 echo "=========================================="
 
-echo "$DOCKER_PASSWORD" | docker login \
-    -u "$DOCKER_USERNAME" \
-    --password-stdin
-
+echo "$DOCKER_PASSWORD" | docker login 
+-u "$DOCKER_USERNAME" 
+--password-stdin
 
 echo ""
 echo "=========================================="
@@ -685,26 +727,25 @@ echo "=========================================="
 
 docker ps -a
 
-
 echo ""
 echo "=========================================="
 echo "PULLING LATEST APPLICATION IMAGES"
 echo "=========================================="
 
-docker compose \
-    -f docker-compose.deploy.yml \
-    pull
-
+docker compose 
+--env-file .env.runtime 
+-f docker-compose-deploy.yaml 
+pull
 
 echo ""
 echo "=========================================="
 echo "STARTING APPLICATION"
 echo "=========================================="
 
-docker compose \
-    -f docker-compose.deploy.yml \
-    up -d
-
+docker compose 
+--env-file .env.runtime 
+-f docker-compose-deploy.yaml 
+up -d
 
 echo ""
 echo "=========================================="
@@ -713,6 +754,15 @@ echo "=========================================="
 
 docker ps
 
+echo ""
+echo "=========================================="
+echo "APPLICATION STATUS"
+echo "=========================================="
+
+docker compose 
+--env-file .env.runtime 
+-f docker-compose-deploy.yaml 
+ps
 
 echo ""
 echo "=========================================="
@@ -720,7 +770,6 @@ echo "CLEANING UNUSED DOCKER IMAGES"
 echo "=========================================="
 
 docker image prune -af
-
 
 echo ""
 echo "=========================================="
@@ -730,15 +779,18 @@ echo "=========================================="
 REMOTE_SCRIPT
 
 
-                                echo ""
-                                echo "=========================================="
-                                echo "APPLICATION DEPLOYED SUCCESSFULLY"
-                                echo "=========================================="
-                            """
-                        }
-                    }
-                }
-            }
+                echo ""
+                echo "=========================================="
+                echo "APPLICATION DEPLOYED SUCCESSFULLY"
+                echo "=========================================="
+            """
+        }
+    }
+}
+
+
+}
+
         }
 
 

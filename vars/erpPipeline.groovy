@@ -584,7 +584,7 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
                                 sshpass -p "\$SSH_PASSWORD" ssh \
                                     -o StrictHostKeyChecking=no \
                                     -o ConnectTimeout=10 \
-                                    "\$SSH_USER@${env.APP_PUBLIC_IP}" \
+                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
                                     "hostname && whoami"
 
 
@@ -599,7 +599,7 @@ Database Private IP    : ${env.DB_PRIVATE_IP}
 
                                 sshpass -p "\$SSH_PASSWORD" ssh \
                                     -o StrictHostKeyChecking=no \
-                                    "\$SSH_USER@${env.APP_PUBLIC_IP}" \
+                                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
                                     "mkdir -p /home/\$SSH_USER/erp"
 
 

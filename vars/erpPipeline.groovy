@@ -203,30 +203,7 @@ AWS Region  : ${awsRegion}
                             ).trim()
 
 
-                            /*
-                             * DATABASE PRIVATE IP
-                             *
-                             * Database is in private subnet.
-                             * We intentionally do NOT search for Public IP.
-                             */
-
-                            env.DB_PRIVATE_IP = sh(
-                                script: """
-                                    aws ec2 describe-instances \
-                                    --region ${awsRegion} \
-                                    --filters \
-                                    "Name=tag:Project,Values=${projectName}" \
-                                    "Name=tag:Environment,Values=${params.ENVIRONMENT}" \
-                                    "Name=tag:component,Values=database" \
-                                    "Name=tag:Created_by,Values=${pocName}" \
-                                    "Name=tag:Lifecycle,Values=Persistent" \
-                                    "Name=instance-state-name,Values=running" \
-                                    --query 'Reservations[].Instances[].PrivateIpAddress' \
-                                    --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-
+                           
 
                             if (!env.APP_PUBLIC_IP) {
                                 error("Application EC2 Public IP was not found")
@@ -236,9 +213,7 @@ AWS Region  : ${awsRegion}
                                 error("Application EC2 Private IP was not found")
                             }
 
-                            if (!env.DB_PRIVATE_IP) {
-                                error("Shared Database Private IP was not found")
-                            }
+                            
 
 
                             echo """
@@ -248,7 +223,6 @@ INFRASTRUCTURE DISCOVERED
 
 App Public IP  : ${env.APP_PUBLIC_IP}
 App Private IP : ${env.APP_PRIVATE_IP}
-DB Private IP  : ${env.DB_PRIVATE_IP}
 
 ==================================================
 """
@@ -257,6 +231,29 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                 }
             }
 
+
+            
+            stage('Configure Application Environment') {
+    steps {
+        sh """
+            set -e
+
+            echo "=========================================="
+            echo "CONFIGURE APPLICATION .ENV"
+            echo "=========================================="
+
+            echo "App Public IP : ${env.APP_PUBLIC_IP}"
+
+            sed -i \
+                -e "s|{{APP_PUBLIC_IP}}|${env.APP_PUBLIC_IP}|g" \
+                .env
+
+            echo ""
+            echo "Configured application environment:"
+            grep -E '^(DB_HOST|ALLOWED_HOSTS|CORS_ALLOWED_ORIGINS|FRONTEND_URL)=' .env
+        """
+    }
+}
 
             /*
              * ========================================================
@@ -361,12 +358,11 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
              * ========================================================
              */
 
-            stage('Deploy Application to App EC2') {
+        stage('Deploy Application to App EC2') {
 
     steps {
 
         withCredentials([
-
             usernamePassword(
                 credentialsId: appEc2Credentials,
                 usernameVariable: 'SSH_USER',
@@ -378,7 +374,6 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
                 usernameVariable: 'DOCKER_USERNAME',
                 passwordVariable: 'DOCKER_PASSWORD'
             )
-
         ]) {
 
             /*
@@ -405,52 +400,7 @@ DB Private IP  : ${env.DB_PRIVATE_IP}
 
             /*
              * ====================================================
-             * CREATE RUNTIME ENVIRONMENT FILE
-             * ====================================================
-             */
-
-            sh """
-                set -e
-
-                echo "=========================================="
-                echo "GENERATE RUNTIME ENVIRONMENT FILE"
-                echo "=========================================="
-
-                cat > .env.runtime <<EOF
-DEBUG=False
-
-SECRET_KEY=Ghgihtb=S(v+AP+106nO^a83wccGJh#CuNP_Fiqu)V%A7uEG^Z
-
-DB_ENGINE=django.db.backends.mysql
-
-DB_HOST=${env.DB_PRIVATE_IP}
-
-DB_PORT=3306
-
-DB_NAME=erp_db
-
-DB_USER=erp_user
-
-DB_PASSWORD=erp_pass
-
-ALLOWED_HOSTS=localhost,127.0.0.1,${env.APP_PUBLIC_IP}
-
-CORS_ALLOWED_ORIGINS=http://${env.APP_PUBLIC_IP}:3000
-
-FRONTEND_URL=http://${env.APP_PUBLIC_IP}:3000
-
-PORT=8000
-
-VERSION=${params.VERSION}
-EOF
-
-                echo "Runtime environment file generated successfully"
-            """
-
-
-            /*
-             * ====================================================
-             * COPY DEPLOYMENT FILES TO APP EC2
+             * COPY DEPLOYMENT FILES
              * ====================================================
              */
 
@@ -470,9 +420,33 @@ EOF
                 sshpass -p "\$SSH_PASSWORD" scp \
                     -o StrictHostKeyChecking=no \
                     -o UserKnownHostsFile=/dev/null \
-                    .env.runtime \
+                    .env \
                     docker-compose-deploy.yaml \
                     "\$SSH_USER@${env.APP_PRIVATE_IP}:/home/ec2-user/erp/"
+            """
+
+
+            /*
+             * ====================================================
+             * VERIFY DEPLOYMENT FILES
+             * ====================================================
+             */
+
+            sh """
+                set -e
+
+                echo "=========================================="
+                echo "VERIFY DEPLOYMENT FILES"
+                echo "=========================================="
+
+                sshpass -p "\$SSH_PASSWORD" ssh \
+                    -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null \
+                    "\$SSH_USER@${env.APP_PRIVATE_IP}" \
+                    "cd /home/ec2-user/erp && \
+                     test -f .env && \
+                     test -f docker-compose-deploy.yaml && \
+                     echo 'Deployment files verified'"
             """
 
 
@@ -501,6 +475,9 @@ set -e
 
 cd /home/ec2-user/erp
 
+export VERSION="${params.VERSION}"
+
+
 echo "=========================================="
 echo "DOCKER LOGIN"
 echo "=========================================="
@@ -511,11 +488,18 @@ echo "\$DOCKER_PASSWORD" | docker login \
 
 
 echo "=========================================="
+echo "VERIFY IMAGE VERSION"
+echo "=========================================="
+
+echo "VERSION=\$VERSION"
+
+
+echo "=========================================="
 echo "PULL DOCKER IMAGES"
 echo "=========================================="
 
 docker compose \
-    --env-file .env.runtime \
+    --env-file .env \
     -f docker-compose-deploy.yaml \
     pull
 
@@ -525,7 +509,7 @@ echo "START APPLICATION"
 echo "=========================================="
 
 docker compose \
-    --env-file .env.runtime \
+    --env-file .env \
     -f docker-compose-deploy.yaml \
     up -d
 
@@ -535,9 +519,19 @@ echo "RUNNING CONTAINERS"
 echo "=========================================="
 
 docker compose \
-    --env-file .env.runtime \
+    --env-file .env \
     -f docker-compose-deploy.yaml \
     ps
+
+
+echo "=========================================="
+echo "BACKEND HEALTH CHECK"
+echo "=========================================="
+
+docker compose \
+    --env-file .env \
+    -f docker-compose-deploy.yaml \
+    ps --status running
 
 
 echo "=========================================="
@@ -575,7 +569,6 @@ APPLICATION DEPLOYED SUCCESSFULLY
 
 App Private IP : ${env.APP_PRIVATE_IP}
 App Public IP  : ${env.APP_PUBLIC_IP}
-DB Private IP  : ${env.DB_PRIVATE_IP}
 
 Version        : ${params.VERSION}
 
